@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>スーパーマリオブラザーズ</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #000;
+        }
+        #gameCanvas {
+            border: 2px solid #FFF;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="800" height="480"></canvas>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // ゲーム状態
+        let gameLoop;
+        let gameState = 'playing'; // 'playing', 'gameOver', 'gameClear'
+        let camera = { x: 0, y: 0 };
+        
+        // プレイヤー（マリオ）
+        const mario = {
+            x: 50,
+            y: 400,
+            width: 32,
+            height: 32,
+            speed: 5,
+            jumpPower: 15,
+            gravity: 0.8,
+            velY: 0,
+            jumping: false,
+            grounded: false,
+            big: false
+        };
+
+        // キー入力の状態
+        const keys = {};
+
+        // ゲームオブジェクト
+        let platforms = [];
+        let coins = [];
+        let enemies = [];
+        let blocks = [];
+        let items = [];
+        let goal;
+
+        // スコアと時間
+        let score = 0;
+        let time = 300;
+
+        // ゲーム初期化
+        function init() {
+            // 地面を追加（穴あり）
+            platforms = [
+                {x: 0, y: 448, width: 1000, height: 32},
+                {x: 1100, y: 448, width: 1000, height: 32},
+                {x: 2200, y: 448, width: 1000, height: 32}
+            ];
+            
+            // コインを配置
+            for (let i = 0; i < 10; i++) {
+                coins.push({x: 200 + i * 150, y: 350, width: 20, height: 20});
+            }
+
+            // 敵を配置
+            enemies.push({x: 600, y: 416, width: 32, height: 32, speed: 2, alive: true});
+            enemies.push({x: 1200, y: 416, width: 32, height: 32, speed: 2, alive: true});
+
+            // ブロックを配置
+            blocks.push({x: 400, y: 300, width: 32, height: 32, type: 'brick'});
+            blocks.push({x: 432, y: 300, width: 32, height: 32, type: 'question', hit: false});
+            blocks.push({x: 464, y: 300, width: 32, height: 32, type: 'brick'});
+
+            // ゴールを設定
+            goal = {
+                flag: {x: 3000, y: 128, width: 32, height: 320},
+                castle: {x: 3200, y: 352, width: 160, height: 128}
+            };
+
+            // キーイベントリスナーを設定
+            window.addEventListener('keydown', function(e) {
+                keys[e.code] = true;
+            });
+            window.addEventListener('keyup', function(e) {
+                keys[e.code] = false;
+            });
+
+            // ゲームループを開始
+            gameLoop = setInterval(update, 1000 / 60);
+        }
+
+        // ゲーム状態の更新
+        function update() {
+            if (gameState === 'playing') {
+                movePlayer();
+                moveEnemies();
+                moveItems();
+                checkCollisions();
+                checkFall();
+                checkGoal();
+                updateCamera();
+                updateTime();
+            }
+            draw();
+        }
+
+        // プレイヤーの移動
+        function movePlayer() {
+            if (keys['ArrowLeft']) {
+                mario.x -= mario.speed;
+            }
+            if (keys['ArrowRight']) {
+                mario.x += mario.speed;
+            }
+            if (keys['ArrowUp'] && !mario.jumping && mario.grounded) {
+                mario.jumping = true;
+                mario.grounded = false;
+                mario.velY = -mario.jumpPower;
+            }
+
+            mario.velY += mario.gravity;
+            mario.y += mario.velY;
+
+            // 地面との衝突判定
+            mario.grounded = false;
+            for (let platform of platforms) {
+                if (collision(mario, platform)) {
+                    mario.grounded = true;
+                    mario.y = platform.y - mario.height;
+                    mario.velY = 0;
+                    break;
+                }
+            }
+
+            // ブロックとの衝突判定
+            for (let block of blocks) {
+                if (collision(mario, block)) {
+                    if (mario.velY > 0) {
+                        mario.grounded = true;
+                        mario.y = block.y - mario.height;
+                        mario.velY = 0;
+                    } else if (mario.velY < 0) {
+                        // ブロックの下から衝突
+                        mario.velY = 0;
+                        if (block.type === 'question' && !block.hit) {
+                            block.hit = true;
+                            spawnMushroom(block.x, block.y - 32);
+                        }
+                    }
+                }
+            }
+
+            if (mario.grounded) {
+                mario.jumping = false;
+            }
+        }
+
+        // 敵の移動
+        function moveEnemies() {
+            for (let enemy of enemies) {
+                if (enemy.alive) {
+                    enemy.x -= enemy.speed;
+                    if (enemy.x < camera.x - 100) {
+                        enemy.x = camera.x + 900;
+                    }
+                }
+            }
+        }
+
+        // アイテムの移動
+        function moveItems() {
+            for (let item of items) {
+                if (item.type === 'mushroom') {
+                    item.x += item.speed;
+                    item.y += item.velY;
+                    item.velY += mario.gravity;
+
+                    // 地面との衝突判定
+                    for (let platform of platforms) {
+                        if (collision(item, platform)) {
+                            item.y = platform.y - item.height;
+                            item.velY = 0;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // きのこアイテムの生成
+        function spawnMushroom(x, y) {
+            items.push({
+                x: x,
+                y: y,
+                width: 32,
+                height: 32,
+                speed: 2,
+                velY: 0,
+                type: 'mushroom'
+            });
+        }
+
+        // 衝突判定
+        function checkCollisions() {
+            // コインとの衝突
+            for (let i = coins.length - 1; i >= 0; i--) {
+                if (collision(mario, coins[i])) {
+                    coins.splice(i, 1);
+                    score += 100;
+                }
+            }
+
+            // 敵との衝突
+            for (let enemy of enemies) {
+                if (enemy.alive && collision(mario, enemy)) {
+                    if (mario.y + mario.height < enemy.y + enemy.height / 2) {
+                        // 敵を踏んだ
+                        enemy.alive = false;
+                        mario.velY = -mario.jumpPower / 2; // 小ジャンプ
+                        score += 200;
+                    } else {
+                        // 敵に当たった
+                        if (mario.big) {
+                            mario.big = false;
+                            mario.height = 32;
+                        } else {
+                            gameOver();
+                        }
+                    }
+                }
+            }
+
+            // アイテムとの衝突
+            for (let i = items.length - 1; i >= 0; i--) {
+                if (collision(mario, items[i])) {
+                    if (items[i].type === 'mushroom') {
+                        mario.big = true;
+                        mario.height = 64;
+                        mario.y -= 32;
+                        score += 1000;
+                    }
+                    items.splice(i, 1);
+                }
+            }
+        }
+
+        // 落下チェック
+        function checkFall() {
+            if (mario.y > canvas.height) {
+                gameOver();
+            }
+        }
+
+        // ゴールチェック
+        function checkGoal() {
+            if (collision(mario, goal.flag)) {
+                score += Math.ceil(time) * 10; // 残り時間をスコアに加算
+                gameClear();
+            }
+        }
+
+        // カメラの更新
+        function updateCamera() {
+            camera.x = mario.x - 400;
+            if (camera.x < 0) camera.x = 0;
+        }
+
+        // 衝突判定ヘルパー関数
+        function collision(obj1, obj2) {
+            return obj1.x < obj2.x + obj2.width &&
+                   obj1.x + obj1.width > obj2.x &&
+                   obj1.y < obj2.y + obj2.height &&
+                   obj1.y + obj1.height > obj2.y;
+        }
+
+        // 時間の更新
+        function updateTime() {
+            if (time > 0) {
+                time -= 1/60;
+            } else {
+                gameOver();
+            }
+        }
+
+        // ゲームオーバー
+        function gameOver() {
+            gameState = 'gameOver';
+            clearInterval(gameLoop);
+        }
+
+        // ゲームクリア
+        function gameClear() {
+            gameState = 'gameClear';
+            clearInterval(gameLoop);
+        }
+
+        // 描画
+        function draw() {
+            // 背景
+            ctx.fillStyle = '#5C94FC';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            ctx.translate(-camera.x, 0);
+
+            // 地面
+            ctx.fillStyle = '#8B4513';
+            for (let platform of platforms) {
+                ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+            }
+
+            // ブロック
+            for (let block of blocks) {
+                if (block.type === 'brick') {
+                    ctx.fillStyle = '#B87333';
+                } else if (block.type === 'question') {
+                    ctx.fillStyle = block.hit ? '#B87333' : '#FFD700';
+                }
+                ctx.fillRect(block.x, block.y, block.width, block.height);
+            }
+
+            // マリオ
+            ctx.fillStyle = 'red';
+            ctx.fillRect(mario.x, mario.y, mario.width, mario.height);
+
+            // コイン
+            ctx.fillStyle = 'gold';
+            for (let coin of coins) {
+                ctx.fillRect(coin.x, coin.y, coin.width, coin.height);
+            }
+
+            // 敵
+            ctx.fillStyle = 'green';
+            for (let enemy of enemies) {
+                if (enemy.alive) {
+                    ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+                }
+            }
+
+            // アイテム
+            ctx.fillStyle = 'red';
+            for (let item of items) {
+                ctx.fillRect(item.x, item.y, item.width, item.height);
+            }
+
+            // ゴール（旗とお城）
+            ctx.fillStyle = 'gray';
+            ctx.fillRect(goal.flag.x, goal.flag.y, goal.flag.width, goal.flag.height);
+            ctx.fillStyle = '#8B4513';
+            ctx.fillRect(goal.castle.x, goal.castle.y, goal.castle.width, goal.castle.height);
+
+            ctx.restore();
+
+            // UI
+            ctx.fillStyle = 'white';
+            ctx.font = '20px Arial';
+            ctx.fillText(`Score: ${score}`, 10, 30);
+            ctx.fillText(`Time: ${Math.ceil(time)}`, 700, 30);
+
+            if (gameState === 'gameOver') {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white';
+                ctx.font = '40px Arial';
+                ctx.fillText('GAME OVER', 300, 240);
+                ctx.font = '20px Arial';
+                ctx.fillText('Press R to Restart', 320, 280);
+            } else if (gameState === 'gameClear') {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = 'white';
+                ctx.font = '40px Arial';
+                ctx.fillText('GAME CLEAR!', 280, 240);
+                ctx.font = '20px Arial';
+                ctx.fillText(`Final Score: ${score}`, 320, 280);
+                ctx.fillText('Press R to Restart', 320, 320);
+            }
+        }
+
+        // リスタート
+        window.addEventListener('keydown', function(e) {
+            if (e.code === 'KeyR' && (gameState === 'gameOver' || gameState === 'gameClear')) {
+                restartGame();
+            }
+        });
+
+        function restartGame() {
+            mario.x = 50;
+            mario.y = 400;
+            mario.velY = 0;
+            mario.big = false;
+            mario.height = 32;
+            score = 0;
+            time = 300;
+            camera.x = 0;
+            coins = [];
+            enemies = [];
+            items = [];
+            gameState = 'playing';
+            init();
+        }
+
+        // ゲーム開始
+        init();
+    </script>
+</body>
+</html>
